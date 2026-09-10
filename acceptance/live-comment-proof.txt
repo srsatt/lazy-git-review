@@ -1,0 +1,2 @@
+lazy-git-review 0.1.0 live review fixture
+This added line exists only to verify one authorized COMMENT review.
