@@ -17,7 +17,16 @@ endpoint = next((arg for arg in args if arg.startswith("repos/")), "")
 if "--method" in args and "POST" in args:
     count = int(state.read_text()) if state.exists() else 0
     state.write_text(str(count + 1))
-    json.load(sys.stdin)
+    payload = json.load(sys.stdin)
+    if mode == "validate_payload":
+        single = next(comment for comment in payload["comments"] if comment["body"] == "Left-side feedback")
+        if "start_line" in single or "start_side" in single:
+            print("single-line comments must omit multiline fields", file=sys.stderr)
+            raise SystemExit(2)
+        multiline = next(comment for comment in payload["comments"] if comment["body"] == "Please verify this behavior")
+        if multiline.get("start_line") != 1 or multiline.get("start_side") != "RIGHT":
+            print("multiline comment coordinates are incomplete", file=sys.stderr)
+            raise SystemExit(2)
     if mode == "lost_response":
         print("connection lost", file=sys.stderr)
         raise SystemExit(1)

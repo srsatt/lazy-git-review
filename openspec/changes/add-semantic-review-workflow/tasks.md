@@ -100,7 +100,7 @@
 - [x] 10.3 Qualify isolated mixed frontend/backend, TSX, HTML, CSS, and excluded-test fixtures separately from the historical Inker diff; verify expected symbols, honest unsupported relations, and typed resolved test references with real language servers.
 - [x] 10.4 Run an external ranking agent using the shipped skill against the pinned Inker session; record runner/model, elapsed time, query/byte totals, coverage, scores/tags/rationales, and demonstrate a consequential logic change ahead of mechanical work without a provider integration in `lgr`.
 - [x] 10.5 Perform interactive acceptance with the TUI controlling navigation and the existing `<leader>rc` comment experience; verify source side/range, shared progress, persistence after restart, and editable Markdown handoff.
-- [ ] 10.6 After explicit authorization for a designated test PR, submit a real COMMENT review through the complete flow and fetch it back; verify author, original commit, inline path/side/range, and absence of duplicates. Keep this gate pending if live publication is not authorized; mocks are not live proof.
+- [x] 10.6 After explicit authorization for a designated test PR, submit a real COMMENT review through the complete flow and fetch it back; verify author, original commit, inline path/side/range, and absence of duplicates. Keep this gate pending if live publication is not authorized; mocks are not live proof.
 
 ## 11. Single-release packaging and checks
 

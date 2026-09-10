@@ -202,3 +202,34 @@ fn verifies_identity_and_never_blindly_retries_uncertain_submission() {
     );
     assert_eq!(fs::read_to_string(&state).unwrap(), "1");
 }
+
+#[test]
+fn omits_multiline_fields_from_single_line_submission_comments() {
+    let (_repo, _data, snapshot, base, head) = fixture();
+    let drafts = drafts(&snapshot);
+    let ids: Vec<_> = drafts.drafts.keys().cloned().collect();
+    let state = snapshot.storage_dir.join("mutations");
+    let adapter = adapter(&state, "validate_payload", &base, &head);
+    let pull = adapter.fetch_pull(7).unwrap();
+    let preview = adapter
+        .preview(
+            &pull,
+            &snapshot,
+            &drafts,
+            &ids,
+            ReviewEvent::Comment,
+            "Summary".into(),
+        )
+        .unwrap();
+
+    let response = adapter
+        .submit(
+            &preview,
+            &pull,
+            &drafts,
+            &snapshot.storage_dir.join("payload-intent.json"),
+        )
+        .unwrap();
+
+    assert_eq!(response["id"], 9001);
+}

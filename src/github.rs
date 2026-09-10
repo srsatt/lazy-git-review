@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::comments::{DraftComment, DraftStore};
@@ -75,6 +75,26 @@ pub struct ReviewPreview {
     pub summary: String,
     pub comments: Vec<PreviewComment>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct ReviewSubmissionPayload<'a> {
+    commit_id: &'a str,
+    body: &'a str,
+    event: &'a ReviewEvent,
+    comments: Vec<ReviewSubmissionComment<'a>>,
+}
+
+#[derive(Serialize)]
+struct ReviewSubmissionComment<'a> {
+    path: &'a str,
+    line: u32,
+    side: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start_side: Option<&'a str>,
+    body: &'a str,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -286,19 +306,23 @@ impl GitHubAdapter {
             response: None,
         };
         save_intent(intent_path, &intent)?;
-        let payload = json!({
-            "commit_id": preview.head_sha,
-            "body": preview.summary,
-            "event": preview.event,
-            "comments": preview.comments.iter().map(|comment| json!({
-                "path": comment.path,
-                "line": comment.line,
-                "side": comment.side,
-                "start_line": comment.start_line,
-                "start_side": comment.start_side,
-                "body": comment.body,
-            })).collect::<Vec<_>>(),
-        });
+        let payload = ReviewSubmissionPayload {
+            commit_id: &preview.head_sha,
+            body: &preview.summary,
+            event: &preview.event,
+            comments: preview
+                .comments
+                .iter()
+                .map(|comment| ReviewSubmissionComment {
+                    path: &comment.path,
+                    line: comment.line,
+                    side: &comment.side,
+                    start_line: comment.start_line,
+                    start_side: comment.start_side.as_deref(),
+                    body: &comment.body,
+                })
+                .collect(),
+        };
         let result = self.api_json(
             &[
                 "api".into(),
