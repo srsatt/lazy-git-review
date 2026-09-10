@@ -17,10 +17,13 @@ The default executable directory is `$HOME/.local/bin`. Add it to `PATH`, open a
 Install the required language servers:
 
 ```sh
-npm install --global typescript typescript-language-server vscode-langservers-extracted
+npm install --global \
+  typescript@5.9.3 \
+  typescript-language-server@6.0.0 \
+  vscode-langservers-extracted@4.10.0
 ```
 
-Confirm `typescript-language-server`, `vscode-html-language-server`, and `vscode-css-language-server` are on `PATH`. If TypeScript still fails, confirm the same npm installation contains `typescript/lib/tsserver.js`. Isolated test environments can point `LGR_LSP_BIN_DIR` at their executable directory.
+Confirm `typescript-language-server`, `vscode-html-language-server`, and `vscode-css-language-server` are on `PATH`. If TypeScript still fails, confirm `tsc --version` reports 5.9.3 and the same npm installation contains `typescript/lib/tsserver.js`. TypeScript 7 is not qualified for 0.1.0. Isolated test environments can point `LGR_LSP_BIN_DIR` at their executable directory.
 
 ## Ranking starts an interactive Codex screen
 

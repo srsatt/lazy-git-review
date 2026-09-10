@@ -13,13 +13,13 @@ jobs:
   quality:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: 1.96.0
           components: clippy,rustfmt
       - name: Install real language servers
-        run: npm install --prefix .ci-lsp typescript typescript-language-server vscode-langservers-extracted
+        run: ./scripts/install-lsp-test-dependencies.sh .ci-lsp
       - name: Install Neovim 0.12.4
         run: |
           curl -fsSL -o /tmp/nvim.tar.gz https://github.com/neovim/neovim/releases/download/v0.12.4/nvim-linux-x86_64.tar.gz
@@ -32,4 +32,3 @@ jobs:
           LGR_LSP_BIN_DIR: ${{ github.workspace }}/.ci-lsp/node_modules/.bin
         run: cargo test --all-targets --locked
       - run: ./scripts/check-neovim.sh
-

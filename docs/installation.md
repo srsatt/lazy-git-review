@@ -7,14 +7,20 @@ lazy-git-review 0.1.0 supports macOS on Apple silicon and Linux on x86-64.
 All installations need:
 
 - Git.
+- Node.js 22.22.2 or newer plus npm for qualified language servers.
 - One supported ranking agent. The default profile uses the Codex CLI; OpenCode and custom commands are also supported.
 - Language servers for semantic TypeScript/JavaScript, HTML, and CSS analysis.
 
 Install the language servers with npm:
 
 ```sh
-npm install --global typescript typescript-language-server vscode-langservers-extracted
+npm install --global \
+  typescript@5.9.3 \
+  typescript-language-server@6.0.0 \
+  vscode-langservers-extracted@4.10.0
 ```
+
+These are the qualified 0.1.0 versions. Do not substitute TypeScript 7: the qualified TypeScript language server currently exits during project indexing with that compiler version.
 
 Neovim integration additionally needs Neovim 0.12 and the pinned plugins described in [Neovim integration](neovim.md). Building from source needs the Rust toolchain pinned in `rust-toolchain.toml` (Rust 1.96.0).
 
