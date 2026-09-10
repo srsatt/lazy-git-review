@@ -1,0 +1,457 @@
+#!/usr/bin/env python3
+"""Open a selected gh-dash pull request as an LGR review."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from enum import Enum
+from pathlib import Path
+
+
+ISSUE_PATTERN = re.compile(r"(?<![A-Z0-9])JT-\d+(?![A-Z0-9])", re.IGNORECASE)
+MAX_ISSUES = 5
+ERROR_TAIL_BYTES = 4096
+
+
+class Stage(Enum):
+    CAPTURE_PR = (0, "Capture PR")
+    YOUTRACK_CONTEXT = (1, "YouTrack context")
+    BUILD_GRAPH = (2, "Build graph")
+    RANK_CHANGES = (3, "Rank changes")
+    OPEN_REVIEW = (4, "Open review")
+    REVIEW_READY = (5, "Review ready")
+
+
+class ProgressDisplay:
+    SPINNER = "|/-\\"
+    WIDTH = 10
+
+    def __init__(self) -> None:
+        self.stage: Stage | None = None
+        self.spinner = 0
+        self.finished = False
+        self.tty = sys.stderr.isatty()
+
+    def start(self, stage: Stage) -> None:
+        self.stage = stage
+        self.spinner = 0
+        self._render()
+
+    def tick(self) -> None:
+        if not self.tty or self.stage is None or self.finished:
+            return
+        self.spinner = (self.spinner + 1) % len(self.SPINNER)
+        self._render()
+
+    def complete(self) -> None:
+        self.stage = Stage.REVIEW_READY
+        self.finished = True
+        self._render(final=True)
+
+    def fail(self) -> None:
+        if self.finished or self.stage is None:
+            return
+        line = self._line(final=True) + " failed"
+        if self.tty:
+            sys.stderr.write(f"\r\033[2K{line}\n")
+        else:
+            print(line, file=sys.stderr)
+        sys.stderr.flush()
+        self.finished = True
+
+    def _line(self, *, final: bool = False) -> str:
+        assert self.stage is not None
+        step, label = self.stage.value
+        filled = step * self.WIDTH // 5
+        bar = "#" * filled + "-" * (self.WIDTH - filled)
+        suffix = "" if final else f" {self.SPINNER[self.spinner]}"
+        return f"[{bar}] {step * 20:3d}% {label}{suffix}"
+
+    def _render(self, *, final: bool = False) -> None:
+        line = self._line(final=final)
+        if self.tty:
+            ending = "\n" if final else ""
+            sys.stderr.write(f"\r\033[2K{line}{ending}")
+        else:
+            print(line, file=sys.stderr)
+        sys.stderr.flush()
+
+
+class IntegrationError(RuntimeError):
+    pass
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Capture, enrich, rank, review, and optionally submit a gh-dash PR."
+    )
+    parser.add_argument("--repository", required=True, help="GitHub OWNER/REPO")
+    parser.add_argument("--number", required=True, type=int, help="pull request number")
+    parser.add_argument(
+        "--local-repository", required=True, type=Path, help="local Git checkout"
+    )
+    parser.add_argument(
+        "--youtrack-url",
+        default=os.environ.get("LGR_YOUTRACK_URL", "https://youtrack.jetbrains.com"),
+        help="YouTrack base URL",
+    )
+    parser.add_argument(
+        "--skip-youtrack", action="store_true", help="do not fetch linked JT issues"
+    )
+    parser.add_argument(
+        "--continue-without-youtrack",
+        action="store_true",
+        help="continue when linked issue context cannot be fetched",
+    )
+    parser.add_argument(
+        "--no-publish-prompt",
+        action="store_true",
+        help="leave all review comments as local drafts",
+    )
+    return parser.parse_args()
+
+
+def executable(name: str, override_env: str) -> Path:
+    override = os.environ.get(override_env)
+    if override:
+        candidate = Path(override).expanduser().resolve()
+    else:
+        sibling = Path(__file__).resolve().with_name(name)
+        found = shutil.which(name)
+        candidate = sibling if sibling.is_file() else Path(found).resolve() if found else sibling
+    if not candidate.is_file() or not os.access(candidate, os.X_OK):
+        raise IntegrationError(f"executable not found: {candidate}")
+    return candidate
+
+
+def display_error(envelope: object, fallback: str) -> str:
+    if isinstance(envelope, dict):
+        errors = envelope.get("errors")
+        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            message = errors[0].get("message")
+            if isinstance(message, str) and message:
+                return message
+    return fallback.strip() or "command failed"
+
+
+def lgr_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop("YOUTRACK_TOKEN", None)
+    environment.pop("YOUTRACK_API_KEY", None)
+    return environment
+
+
+def capture_process(
+    command: list[str],
+    *,
+    environment: dict[str, str] | None = None,
+    progress: ProgressDisplay | None = None,
+) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        process = subprocess.Popen(
+            command,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            env=environment,
+        )
+        try:
+            while True:
+                try:
+                    returncode = process.wait(timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    if progress is not None:
+                        progress.tick()
+        except BaseException:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            raise
+        stdout_file.seek(0)
+        stdout = stdout_file.read().decode("utf-8", errors="replace")
+        stderr_file.seek(0, os.SEEK_END)
+        stderr_size = stderr_file.tell()
+        stderr_file.seek(max(0, stderr_size - ERROR_TAIL_BYTES))
+        stderr = stderr_file.read().decode("utf-8", errors="replace")
+    return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+
+
+def run_lgr(
+    lgr: Path,
+    args: list[str],
+    *,
+    progress: ProgressDisplay | None = None,
+) -> object:
+    completed = capture_process(
+        [str(lgr), *args], environment=lgr_environment(), progress=progress
+    )
+    try:
+        envelope = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        envelope = None
+    if completed.returncode != 0:
+        raise IntegrationError(
+            f"lgr {' '.join(args[:2])}: "
+            f"{display_error(envelope, completed.stderr or completed.stdout)}"
+        )
+    if not isinstance(envelope, dict) or envelope.get("ok") is not True:
+        raise IntegrationError(
+            f"lgr {' '.join(args[:2])}: invalid response envelope"
+        )
+    return envelope.get("result")
+
+
+def open_in_neovim(
+    session_id: str, repository: str, number: int, publish_prompt: bool, server: str
+) -> None:
+    nvim = executable("nvim", "LGR_NVIM_BIN")
+    payload = json.dumps(
+        {
+            "session": session_id,
+            "repository": repository,
+            "number": number,
+            "publish": 1 if publish_prompt else 0,
+        }
+    )
+    expression = (
+        "luaeval(\"require('lazy-git-review').open_github_session(_A)\", "
+        f"{payload})"
+    )
+    completed = subprocess.run(
+        [str(nvim), "--server", server, "--remote-expr", expression],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=lgr_environment(),
+    )
+    if completed.returncode != 0 or completed.stdout.strip() not in {"1", "true"}:
+        raise IntegrationError(
+            "Neovim bridge could not attach review session: "
+            + (completed.stderr.strip() or completed.stdout.strip() or "unknown error")
+        )
+
+
+def collect_issue_ids(pull: dict[str, object]) -> list[str]:
+    text = "\n".join(
+        value
+        for value in (pull.get("head_ref"), pull.get("title"), pull.get("body"))
+        if isinstance(value, str)
+    )
+    result: list[str] = []
+    for match in ISSUE_PATTERN.finditer(text):
+        issue_id = match.group(0).upper()
+        if issue_id not in result:
+            result.append(issue_id)
+        if len(result) == MAX_ISSUES:
+            break
+    return result
+
+
+def add_youtrack_context(
+    lgr: Path,
+    fetcher: Path,
+    session_id: str,
+    base_url: str,
+    issue_ids: list[str],
+    progress: ProgressDisplay,
+) -> None:
+    completed = capture_process(
+        [str(fetcher), base_url, *issue_ids], progress=progress
+    )
+    if completed.returncode != 0:
+        raise IntegrationError(completed.stderr.strip() or "YouTrack fetch failed")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", prefix="lgr-youtrack-", suffix=".md", delete=False
+        ) as temporary:
+            temporary.write(completed.stdout)
+            temporary_path = Path(temporary.name)
+        context_args = [
+            "context",
+            "add",
+            session_id,
+            "--file",
+            str(temporary_path),
+        ]
+        if len(issue_ids) == 1:
+            issue_url = f"{base_url.rstrip('/')}/issue/{issue_ids[0]}"
+            context_args.extend(["--source-url", issue_url])
+        run_lgr(lgr, context_args, progress=progress)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def pending_comments(result: object) -> tuple[list[str], int]:
+    if not isinstance(result, dict):
+        raise IntegrationError("comment list returned an invalid result")
+    drafts = result.get("drafts")
+    conflicts = result.get("conflicts")
+    if isinstance(conflicts, list) and conflicts:
+        raise IntegrationError("review has unresolved comment conflicts; drafts were retained")
+    if not isinstance(drafts, dict):
+        raise IntegrationError("comment list returned no drafts map")
+    eligible: list[str] = []
+    skipped = 0
+    for comment_id, draft in drafts.items():
+        if not isinstance(comment_id, str) or not isinstance(draft, dict):
+            skipped += 1
+            continue
+        if (
+            draft.get("remote_id") is None
+            and isinstance(draft.get("anchor"), dict)
+            and draft.get("stale") is False
+            and draft.get("orphaned_reason") is None
+        ):
+            eligible.append(comment_id)
+        elif draft.get("remote_id") is None:
+            skipped += 1
+    return eligible, skipped
+
+
+def publish_after_confirmation(
+    lgr: Path, repository: str, number: int, session_id: str
+) -> None:
+    comment_result = run_lgr(lgr, ["comment", "list", session_id])
+    comment_ids, skipped = pending_comments(comment_result)
+    if not comment_ids:
+        print("No unpublished anchored comments. Review remains local.", file=sys.stderr)
+        return
+    preview = run_lgr(
+        lgr,
+        [
+            "github",
+            "--repository",
+            repository,
+            "preview",
+            session_id,
+            str(number),
+            "--comments",
+            ",".join(comment_ids),
+            "--event",
+            "comment",
+        ],
+    )
+    preview_count = len(preview.get("comments", [])) if isinstance(preview, dict) else 0
+    suffix = f" ({skipped} unpublishable draft(s) retained)" if skipped else ""
+    print(
+        f"Preview ready: {preview_count} inline comment(s){suffix}.", file=sys.stderr
+    )
+    try:
+        answer = input(f"Submit review to {repository}#{number}? [y/N] ").strip().lower()
+    except EOFError:
+        answer = ""
+    if answer not in {"y", "yes"}:
+        print("Not submitted. Drafts retained locally.", file=sys.stderr)
+        return
+    response = run_lgr(
+        lgr, ["github", "--repository", repository, "submit", session_id]
+    )
+    review_id = response.get("id") if isinstance(response, dict) else None
+    detail = f" {review_id}" if review_id is not None else ""
+    print(f"Submitted GitHub review{detail}.", file=sys.stderr)
+
+
+def run_workflow(progress: ProgressDisplay) -> None:
+    args = parse_args()
+    if args.number <= 0:
+        raise IntegrationError("pull request number must be positive")
+    repository = args.repository.strip()
+    if repository.count("/") != 1 or any(not part for part in repository.split("/")):
+        raise IntegrationError("repository must use OWNER/REPO form")
+    local_repository = args.local_repository.expanduser().resolve()
+    if not local_repository.is_dir():
+        raise IntegrationError(
+            f"local repository not found: {local_repository}; configure gh-dash repoPaths"
+        )
+    lgr = executable("lgr", "LGR_BIN")
+    progress.start(Stage.CAPTURE_PR)
+    created = run_lgr(
+        lgr,
+        [
+            "github",
+            "--repository",
+            repository,
+            "create",
+            str(args.number),
+            "--local-repository",
+            str(local_repository),
+        ],
+        progress=progress,
+    )
+    if not isinstance(created, dict):
+        raise IntegrationError("GitHub create returned an invalid result")
+    session = created.get("session")
+    pull = created.get("pull")
+    if not isinstance(session, dict) or not isinstance(session.get("id"), str):
+        raise IntegrationError("GitHub create returned no session ID")
+    if not isinstance(pull, dict):
+        raise IntegrationError("GitHub create returned no pull request context")
+    session_id = session["id"]
+    issue_ids = collect_issue_ids(pull)
+    progress.start(Stage.YOUTRACK_CONTEXT)
+    if issue_ids and not args.skip_youtrack:
+        try:
+            fetcher = executable("lgr-fetch-youtrack", "LGR_FETCH_YOUTRACK_BIN")
+            add_youtrack_context(
+                lgr, fetcher, session_id, args.youtrack_url, issue_ids, progress
+            )
+        except IntegrationError as error:
+            if not args.continue_without_youtrack:
+                raise
+            print(f"YouTrack context unavailable: {error}", file=sys.stderr)
+    progress.start(Stage.BUILD_GRAPH)
+    run_lgr(lgr, ["graph", "build", session_id], progress=progress)
+    progress.start(Stage.RANK_CHANGES)
+    run_lgr(lgr, ["rank", session_id], progress=progress)
+    progress.start(Stage.OPEN_REVIEW)
+    nvim_server = os.environ.get("NVIM")
+    if nvim_server:
+        open_in_neovim(
+            session_id,
+            repository,
+            args.number,
+            not args.no_publish_prompt,
+            nvim_server,
+        )
+        progress.complete()
+        return
+    progress.complete()
+    tui = subprocess.run(
+        [str(lgr), "tui", session_id], check=False, env=lgr_environment()
+    )
+    if tui.returncode != 0:
+        raise IntegrationError(f"LGR TUI exited with status {tui.returncode}")
+    if args.no_publish_prompt:
+        print(f"Review session {session_id}; drafts retained locally.", file=sys.stderr)
+        return
+    publish_after_confirmation(lgr, repository, args.number, session_id)
+
+
+def main() -> None:
+    progress = ProgressDisplay()
+    try:
+        run_workflow(progress)
+    except BaseException:
+        progress.fail()
+        raise
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except IntegrationError as error:
+        print(f"lgr-gh-dash: {error}", file=sys.stderr)
+        raise SystemExit(1)

@@ -1,0 +1,27 @@
+pub mod agent;
+pub mod agent_budget;
+pub mod cli;
+pub mod comments;
+pub mod context;
+pub mod doctor;
+pub mod error;
+pub mod explanations;
+pub mod git;
+pub mod github;
+pub mod graph;
+pub mod indexer;
+pub mod lsp;
+pub mod model;
+pub mod position;
+pub mod profiles;
+pub mod progress;
+pub mod ranking;
+pub mod review_units;
+pub mod settings;
+pub mod snapshot;
+pub mod storage;
+pub mod syntax;
+pub mod test_evidence;
+pub mod tui;
+
+pub use error::{AppError, Result};

@@ -1,0 +1,11 @@
+{
+  "name": "lgr-jest-file-isolation-example",
+  "private": true,
+  "scripts": {
+    "test:one": "jest --runTestsByPath tests/add.test.js --coverage --coverageReporters=json --coverageDirectory=coverage",
+    "test:two": "jest --runTestsByPath tests/subtract.test.js --coverage --coverageReporters=json --coverageDirectory=coverage"
+  },
+  "devDependencies": {
+    "jest": "30.5.1"
+  }
+}

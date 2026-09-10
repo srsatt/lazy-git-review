@@ -1,0 +1,4 @@
+interface:
+  display_name: "Semantic Review Ranker"
+  short_description: "Rank semantic changes for a later reviewer"
+  default_prompt: "Use $semantic-review-ranker to rank this lazy-git-review session with bounded graph queries."

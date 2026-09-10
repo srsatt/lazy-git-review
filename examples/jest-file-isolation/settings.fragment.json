@@ -1,0 +1,23 @@
+{
+  "test_profiles": {
+    "jest-file": {
+      "executable": "./node_modules/.bin/jest",
+      "prepare_executable": "npm",
+      "prepare_argv": ["install", "--ignore-scripts"],
+      "argv": [
+        "--runTestsByPath",
+        "{selection}",
+        "--coverage",
+        "--coverageReporters=json",
+        "--coverageDirectory=coverage"
+      ],
+      "project_root": ".",
+      "timeout_seconds": 600,
+      "max_output_bytes": 8388608,
+      "max_report_bytes": 67108864,
+      "report_format": "istanbul-json",
+      "report_path": "coverage/coverage-final.json",
+      "attribution": "file"
+    }
+  }
+}

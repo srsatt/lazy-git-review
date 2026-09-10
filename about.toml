@@ -1,0 +1,5 @@
+accepted = ["Apache-2.0", "EUPL-1.2", "MIT", "MPL-2.0", "Unicode-3.0", "Unlicense", "Zlib"]
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+ignore-transitive-dependencies = false
